@@ -5,6 +5,7 @@ documentation of the format described in SPEC.md.
 """
 
 import gzip
+import sqlite3
 import struct
 
 import pytest
@@ -46,12 +47,16 @@ def _sample(depth_dm: int, **kw) -> bytearray:
     return rec
 
 
-def build_blob(samples=None, interval_ms=10000, extra_records=None, deco_model=0) -> bytes:
+def build_blob(
+    samples=None, interval_ms=10000, extra_records=None, deco_model=0, imperial=False
+) -> bytes:
     records = []
 
     opening0 = _record(0x10)
+    struct.pack_into(">H", opening0, 2, 13)  # dive number
     opening0[4], opening0[5] = 40, 80  # GF low/high
-    opening0[8] = 0  # metric
+    opening0[8] = 1 if imperial else 0  # units
+    struct.pack_into(">I", opening0, 12, 1758974143)  # 2025-09-27 11:55:43 wall clock
     opening0[20] = 21  # gas 0 O2
     opening0[21] = 50  # gas 1 O2
     records.append(opening0)
@@ -76,6 +81,7 @@ def build_blob(samples=None, interval_ms=10000, extra_records=None, deco_model=0
 
     opening5 = _record(0x15)
     struct.pack_into(">H", opening5, 23, interval_ms)
+    struct.pack_into(">i", opening5, 26, 480)  # UTC offset, minutes
     records.append(opening5)
 
     records.extend(samples or [])
@@ -110,6 +116,9 @@ def test_header():
     assert h["computer_serial"] == 0xA823C228
     assert h["computer_model"] == "Perdix 2"
     assert h["sample_interval_ms"] == 10000
+    assert h["dive_number"] == 13
+    assert h["start_time"] == 1758974143
+    assert h["utc_offset_min"] == 480 and h["dst"] is False
 
 
 def test_samples():
@@ -117,7 +126,8 @@ def test_samples():
         build_blob(
             samples=[
                 _sample(24, ndl_min=99),
-                _sample(528, stop_m=9, tts_min=14, cns=4, ceiling=9, gf99=30),
+                _sample(528, stop_m=9, tts_min=14, ndl_min=2, cns=4, ceiling=9,
+                        gf99=30, at_plus_five=21),
             ]
         )
     )
@@ -130,8 +140,20 @@ def test_samples():
     assert s0.battery_pct == 100
     assert s0.sac is None  # 0xFFFF sentinel
     assert s1.depth_m == 52.8
-    assert (s1.stop_depth_m, s1.tts_min, s1.in_deco) == (9.0, 14.0, 1)
+    assert (s0.ndl_min, s0.stop_time_min, s0.in_deco) == (99.0, None, False)
+    assert (s1.stop_depth_m, s1.tts_min, s1.in_deco) == (9.0, 14.0, True)
+    assert (s1.stop_time_min, s1.ndl_min) == (2.0, None)  # byte 10 is stop time in deco
     assert (s1.ceiling_m, s1.gf99, s1.cns_pct) == (9.0, 30.0, 4.0)
+    assert s1.at_plus_five_min == 21
+
+
+def test_imperial_depths_are_converted_from_feet():
+    s = pnf.decode(
+        build_blob(samples=[_sample(1000, stop_m=30, ceiling=27)], imperial=True)
+    ).samples[0]
+    assert s.depth_m == round(100 * 0.3048, 2)
+    assert s.stop_depth_m == 30 * 0.3048
+    assert s.ceiling_m == 27 * 0.3048
 
 
 def test_battery_voltage_is_16bit():
@@ -178,6 +200,21 @@ def test_length_prefix_validated():
     corrupted = struct.pack("<I", 999999) + blob[4:]
     with pytest.raises(ValueError, match="length mismatch"):
         pnf.decode(corrupted)
+
+
+def test_decode_database_raises_on_a_bad_blob(tmp_path):
+    db = tmp_path / "dive_data.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE log_data (log_id TEXT, format TEXT, data_bytes_1 BLOB)")
+    good = build_blob(samples=[_sample(24)])
+    con.execute("INSERT INTO log_data VALUES ('a', 'sw-pnf', ?)", (good,))
+    con.execute("INSERT INTO log_data VALUES ('b', 'sw-pnf', ?)", (good[:4] + good[5:],))
+    con.commit()
+    con.close()
+    dives = pnf.decode_database(db)
+    assert next(dives)[0] == "a"
+    with pytest.raises(Exception):
+        next(dives)
 
 
 def test_decompress_roundtrip():

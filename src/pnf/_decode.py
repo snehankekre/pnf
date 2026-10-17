@@ -113,9 +113,11 @@ class Sample:
     depth_m: float | None = None
     temp_c: float | None = None
     stop_depth_m: float | None = None
-    stop_or_ndl_min: float | None = None  # stop time when in deco, NDL otherwise
+    ndl_min: float | None = None  # byte 10 when there is no stop
+    stop_time_min: float | None = None  # byte 10 when there is a stop
     tts_min: float | None = None
-    in_deco: int | None = None
+    at_plus_five_min: int | None = None  # TTS if the diver stayed 5 more minutes
+    in_deco: bool | None = None
     avg_ppo2: float | None = None
     o2_pct: float | None = None
     he_pct: float | None = None
@@ -312,12 +314,10 @@ def _parse_sample(
     rtype: int,
     is_dciem: bool,
 ) -> Sample:
-    ft = 0.3048
-    depth = _u16be(rec, 1) / 10.0
-    stop_depth = float(_u16be(rec, 3))
-    if imperial:
-        depth *= ft
-        stop_depth *= ft
+    # Every depth field is in feet on an imperial-units log.
+    scale = 0.3048 if imperial else 1.0
+    depth = _u16be(rec, 1) / 10.0 * scale
+    stop_depth = _u16be(rec, 3) * scale
 
     temp = struct.unpack_from("b", rec, 14)[0]
     if temp < 0:
@@ -334,8 +334,7 @@ def _parse_sample(
         temp_c=float(temp),
         stop_depth_m=stop_depth,
         tts_min=float(_u16be(rec, 5)),
-        stop_or_ndl_min=float(rec[10]),
-        in_deco=1 if _u16be(rec, 3) else 0,
+        in_deco=stop_depth > 0,
         avg_ppo2=rec[7] / 100.0,
         o2_pct=float(rec[8]),
         he_pct=float(rec[9]),
@@ -347,6 +346,11 @@ def _parse_sample(
         sensor2_raw=rec[15],
         sensor3_raw=rec[16],
     )
+
+    if stop_depth:
+        sample.stop_time_min = float(rec[10])
+    else:
+        sample.ndl_min = float(rec[10])
 
     if rtype != AVELO_SAMPLE:
         sample.gas_switch_needed = bool(status & FLAG_GAS_SWITCH)
@@ -361,10 +365,10 @@ def _parse_sample(
     # DCIEM they are a safe-ascent depth: byte 24 whole metres minus byte 25
     # hundredths.
     if is_dciem:
-        sample.safe_ascent_depth_m = rec[24] - rec[25] / 100.0
+        sample.safe_ascent_depth_m = (rec[24] - rec[25] / 100.0) * scale
     else:
         if rec[24] != 0xFF:
-            sample.ceiling_m = float(rec[24])
+            sample.ceiling_m = rec[24] * scale
         if rec[25] != 0xFF:  # 0xFF = not available (still on-gassing)
             sample.gf99 = float(rec[25])
 
@@ -394,7 +398,7 @@ def _parse_sample(
 
     at_plus_five = _u16be(rec, 26)  # TTS if the diver stayed 5 more minutes
     if at_plus_five != 0xFFFF:
-        sample.extra["at_plus_five_min"] = at_plus_five
+        sample.at_plus_five_min = at_plus_five
 
     sac_raw = _u16be(rec, 30)
     if sac_raw != SAC_SENTINEL:
@@ -433,6 +437,9 @@ def _parse_header(
         max_depth *= 0.3048
 
     header = {
+        "dive_number": _u16be(data, o[0] + 2),
+        # Seconds since 1970 on the diver's local wall clock, with no zone.
+        "start_time": _u32be(data, o[0] + 12),
         "logversion": logversion,
         "imperial": imperial,
         "divemode": DIVE_MODES.get(data[o[4] + 1], str(data[o[4] + 1])),
@@ -452,6 +459,12 @@ def _parse_header(
         "max_depth_m": round(max_depth, 2),
         "divetime_s": _u24be(data, c[0] + 6),
     }
+
+    # Opening 5 also has a UTC offset and a DST flag. Perdix 2 and Petrel 3
+    # logs leave both at zero, so zero means "not set" as often as "UTC".
+    if logversion >= 9 and 5 in o:
+        header["utc_offset_min"] = struct.unpack_from(">i", data, o[5] + 26)[0]
+        header["dst"] = bool(data[o[5] + 30])
 
     if final_off is not None:
         header["computer_serial"] = _u32be(data, final_off + 2)

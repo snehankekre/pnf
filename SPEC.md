@@ -76,8 +76,7 @@ Byte 0 of each record:
 | `0x80`–`0x87` | opening-record validity maps | *not decoded* |
 | `0x88` | dive-sample validity map | *not decoded* |
 | `0xE1` | extended dive sample | extra air-integration tanks for the previous sample |
-| `0xFD` | final log byte 2 | |
-| `0xFF` | final log byte 1 | serial, model, firmware ([§5](#5-final-record)) |
+| `0xFF` | final record | serial, model, firmware ([§5](#5-final-record)) |
 
 The record types marked *not decoded* are named in Shearwater's own parser but
 their payloads are not interpreted there either; see [§7](#7-record-types-nobody-decodes).
@@ -96,9 +95,11 @@ record.
 
 | offset | field |
 | --- | --- |
+| 2–3 | dive number (u16 BE) |
 | 4 | gradient factor low |
 | 5 | gradient factor high |
 | 8 | units (0 = metric, 1 = imperial) |
+| 12–15 | dive start time (u32 BE), seconds since 1970 on the local wall clock, with no time zone |
 | 20–29 | O2 percent for gases 0–9 |
 | 30–31 | He percent for gases 0–1 |
 
@@ -133,13 +134,19 @@ record.
 | 17–18 | gas-enabled bitmask (u16 BE, bit per gas) |
 | 28 | air-integration mode |
 
-**Opening 5 (`0x15`)** — log version ≥ 9
+**Opening 5 (`0x15`)**, log version ≥ 9:
 
 | offset | field |
 | --- | --- |
 | 23–24 | sample interval, ms (u16 BE) |
+| 26–29 | UTC offset, minutes (i32 BE) |
+| 30 | daylight saving time flag |
 
-**Opening 9 (`0x19`)** — log version ≥ 17: GNSS entry fix (see [§8](#8-gnss)).
+Perdix 2 and Petrel 3 logs leave bytes 26–30 at zero on every dive examined,
+so on those computers a zero offset means "not set". libdivecomputer reads the
+offset only for the Teric. Shearwater Cloud's parser reads it for every model.
+
+**Opening 9 (`0x19`)**, log version ≥ 17, holds the GNSS entry fix (see [§8](#8-gnss)).
 
 **Closing 0 (`0x20`)**
 
@@ -158,6 +165,13 @@ mirror their opening counterparts with end-of-dive values.
 A `0x01` record. This is where the per-interval dive data lives. All multi-byte
 integers are **big-endian**.
 
+On a log whose units byte (opening 0, byte 8) says imperial, every depth field
+is in feet: depth (bytes 1–2) is in tenths of a foot, and next stop depth,
+ceiling, and safe-ascent depth are in feet. Temperature is in °F. The depth and
+temperature conversions follow libdivecomputer. The ceiling and safe-ascent
+conversions are inferred from the stop depth, because no imperial log was
+available to check them.
+
 | offset | field | type / scaling | notes |
 | --- | --- | --- | --- |
 | 0 | record type | `0x01` | |
@@ -174,8 +188,8 @@ integers are **big-endian**.
 | 14 | water temperature | °C | signed byte; see note below |
 | 15 | O2 cell 2 | millivolts (raw) | |
 | 16 | O2 cell 3 | millivolts (raw) | |
-| 17 | battery voltage, high byte | — | with byte 18: `(17<<8 | 18) / 100` → volts |
-| 18 | battery voltage, low byte | — | high byte is 0 for a ~1.5 V cell but non-zero on higher-voltage computers |
+| 17 | battery voltage, high byte | byte | with byte 18: `(17<<8 | 18) / 100` → volts |
+| 18 | battery voltage, low byte | byte | high byte is 0 for a ~1.5 V cell but non-zero on higher-voltage computers |
 | 19 | current ppO2 setpoint | ÷100 → ata | closed circuit |
 | 20–21 | tank 1 pressure (AI) | see [§4.2](#42-air-integration-bytes-20-21-and-28-29) | |
 | 22 | gas time remaining (AI) | minutes | `0xFF` = n/a |
@@ -221,7 +235,9 @@ tanks) in the same 12-bit ×2 encoding.
 
 ## 5. Final record
 
-A `0xFF` record ends the log and identifies the computer:
+A `0xFF` record whose byte 1 is `0xFD` ends the log and identifies the computer.
+Shearwater Cloud's parser treats the final log as 128 bytes, this record plus
+the three after it. Those three were all-zero padding on every log examined.
 
 | offset | field | type |
 | --- | --- | --- |
@@ -288,9 +304,11 @@ carry the surface GNSS fix at entry and exit:
 
 Samples carry no per-record timestamp; each dive sample is one sample interval
 after the previous one. The interval is 10 s by default, or the value in opening
-record 5 (bytes 23–24) on log version ≥ 9. The dive's wall-clock start time is
-in Shearwater Cloud's `dive_logs` table, not in the blob; note that Shearwater's
-sample timestamps are a local wall clock with no timezone attached.
+record 5 (bytes 23–24) on log version ≥ 9. The dive's start time is opening 0
+bytes 12–15. It counts seconds since 1970 on the diver's local wall clock, so
+reading it as UTC gives the local time, and the true UTC instant needs the
+offset from opening 5 or another source. Across 144 dives it equals the
+`DIVE_START_TIME` that Shearwater Cloud stores beside the blob.
 
 ---
 

@@ -25,7 +25,7 @@ import pnf
 
 for log_id, dive in pnf.decode_database("dive_data.db"):
     h = dive.header
-    print(f"{h['computer_model']} #{h['computer_serial']:X}: "
+    print(f"{h['computer_model']} #{h['computer_serial']:X} dive {h['dive_number']}: "
           f"{h['max_depth_m']} m, {len(dive.samples)} samples")
     for s in dive.samples:
         if s.gf99 is not None:
@@ -43,19 +43,23 @@ dive = pnf.decode(blob)
 
 `decode()` returns a `Dive` with:
 
-- `header` — a dict of dive configuration: gases, gradient factors, deco model,
-  water density, atmospheric pressure, sample interval, computer serial / model
-  / firmware, GNSS entry/exit fix (on computers that log it), and verbatim
-  copies of the raw config records.
-- `samples` — a list of `Sample`, one per log interval (typically every 10 s),
-  each with depth, temperature, TTS, next-stop depth, NDL, average and per-cell
+- `header`: a dict with the dive number and start time, and the dive
+  configuration: gases, gradient factors, deco model, water density,
+  atmospheric pressure, sample interval, computer serial, model, and firmware,
+  the GNSS entry and exit fix (on computers that log it), and verbatim copies
+  of the raw config records. `start_time` is seconds since 1970 on the local
+  wall clock with no time zone, so `datetime.fromtimestamp(t, timezone.utc)`
+  gives the local time the computer showed.
+- `samples`: a list of `Sample`, one per log interval (typically every 10 s),
+  each with depth, temperature, TTS, next-stop depth and time, NDL, average and per-cell
   ppO2, CNS, **GF99**, **deco ceiling**, **battery voltage and percentage**,
   gas fractions, setpoint, wireless-air-integration tank pressures, SAC, the
   decoded status/mode bits (including CCR solenoid-fired count), and the "@+5"
-  prediction. Channels the computer did not record are `None`.
-- `gases` — the ten programmed gases (O2/He, open- vs closed-circuit, enabled).
-- `events` — info-event records.
-- `unknown_records` — every record type this decoder does not interpret, kept
+  prediction. Channels the computer did not record are `None`. Depths are in
+  metres even on an imperial-units log.
+- `gases`: the ten programmed gases (O2/He, open- vs closed-circuit, enabled).
+- `events`: info-event records.
+- `unknown_records`: every record type this decoder does not interpret, kept
   verbatim as `(type_key, seq, raw_bytes)`. Shearwater's own desktop parser also
   leaves several record types (tissue snapshots, validity maps, surface ppO2,
   button pushes, DiveCAN events) undecoded; `pnf` preserves them rather than

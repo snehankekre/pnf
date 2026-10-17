@@ -7,8 +7,8 @@ native log in a ``data_bytes_1`` BLOB, tagged ``sw-pnf`` in ``format``.
 These helpers pull those blobs out and decode them. They read the database
 read-only and only touch ``log_data``, so they are insensitive to the rest of
 Cloud's (large and frequently-changing) schema. Everything else about a dive,
-including the computer serial, model, and configuration, comes from the decoded
-log itself.
+including the start time, dive number, computer serial, model, and
+configuration, comes from the decoded log itself.
 """
 
 from __future__ import annotations
@@ -45,12 +45,8 @@ def iter_log_blobs(path: str | Path) -> Iterator[tuple[str, bytes]]:
 def decode_database(path: str | Path) -> Iterator[tuple[str, Dive]]:
     """Yield ``(log_id, Dive)`` for every ``sw-pnf`` log in ``dive_data.db``.
 
-    Blobs that fail to decode are skipped silently; use :func:`iter_log_blobs`
-    if you want to handle decode errors yourself.
+    A blob that fails to decode raises. Use :func:`iter_log_blobs` and call
+    :func:`decode` yourself if you want to skip bad logs.
     """
     for log_id, blob in iter_log_blobs(path):
-        try:
-            dive = decode(blob)
-        except (ValueError, OSError):
-            continue
-        yield log_id, dive
+        yield log_id, decode(blob)
