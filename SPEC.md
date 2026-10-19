@@ -72,7 +72,7 @@ Byte 0 of each record:
 | `0x40` | DiveCAN event | *not decoded* ([§7](#7-record-types-nobody-decodes)) |
 | `0x50` | button push | *not decoded* |
 | `0x60` | surface ppO2 | *not decoded* |
-| `0x70`–`0x75` | tissue-loading snapshots | *not decoded* |
+| `0x70`–`0x75` | tissue-loading snapshot | six records per snapshot ([§7.1](#71-tissue-loading-snapshots-0x700x75)) |
 | `0x80`–`0x87` | opening-record validity maps | *not decoded* |
 | `0x88` | dive-sample validity map | *not decoded* |
 | `0xE1` | extended dive sample | extra air-integration tanks for the previous sample |
@@ -80,6 +80,8 @@ Byte 0 of each record:
 
 The record types marked *not decoded* are named in Shearwater's own parser but
 their payloads are not interpreted there either; see [§7](#7-record-types-nobody-decodes).
+Shearwater's parser doesn't interpret the tissue-loading snapshots either, but
+their layout has since been worked out from logs ([§7.1](#71-tissue-loading-snapshots-0x700x75)).
 
 ---
 
@@ -279,11 +281,52 @@ The record types `0x40` (DiveCAN event), `0x50` (button push), `0x60` (surface
 ppO2), `0x70`–`0x75` (tissue-loading snapshots), and `0x80`–`0x88` (validity
 maps) are **named** in Shearwater's own desktop parser but their payloads are
 **not decoded** there; the parser routes them to its unknown-record handler.
-Their internal layout is therefore not publicly known. A conforming decoder
-should preserve these records verbatim rather than drop them, so that a future
-decoder can revisit them. There is, in particular, no recoverable per-compartment
-tissue-loading data beyond what the named-but-unparsed tissue records might one
-day yield.
+The layout of all but the tissue-loading snapshots is therefore not publicly
+known. A conforming decoder should preserve these records verbatim rather than
+drop them, so that a future decoder can revisit them.
+
+### 7.1 Tissue-loading snapshots (`0x70`–`0x75`)
+
+A snapshot is six consecutive records, `0x70` through `0x75`, always in that
+order. It holds the computer's 16 nitrogen and 16 helium compartment loadings.
+Bytes 1–3 of each record are zero. The payload is little-endian IEEE 754
+float32 values, unlike the big-endian integers elsewhere in the format:
+
+| record | bytes 4–31 |
+| --- | --- |
+| `0x70` | floats 0–6 |
+| `0x71` | floats 7–13 |
+| `0x72` | floats 14–20 |
+| `0x73` | floats 21–27 |
+| `0x74` | floats 28–34 |
+| `0x75` | floats 35–40 in bytes 4–27, then a **big-endian** uint32 timestamp in bytes 28–31 |
+
+| floats | meaning |
+| --- | --- |
+| 0–15 | nitrogen loading of compartments 1–16, in bar |
+| 16–31 | helium loading of compartments 1–16, in bar |
+| 32–39 | not identified |
+| 40 | zero in every snapshot observed |
+
+The timestamp uses the same clock as the start time in opening record 0. The
+first snapshot comes before the first dive sample, with the dive's start time
+as its timestamp, so it gives the compartment loadings at the start of the
+dive. Later snapshots follow every 24 samples at the default 10-second sample
+interval, 238–243 seconds apart by their timestamps.
+
+The values are identified as bar from what they read at rest. After a long
+surface interval, every nitrogen value reads about 0.758, which is the
+nitrogen partial pressure of air, (1.021 − 0.0627) × 0.7902 = 0.757 bar, at
+the 1021 mbar surface pressure the same log records. Helium values sit near
+0.001 on air and nitrox dives, and rise only on dives with a helium mix,
+reaching several bar in the fastest compartments on a 100 m trimix dive.
+Floats 32–35 behave like nitrogen loadings and 36–39 like helium loadings, but
+what they track hasn't been established.
+
+These observations come from 144 logs from a Perdix 2 and a Petrel 3, holding
+1,487 snapshots (8,922 records, all in order). In 143 of the 144, the first
+snapshot's timestamp equals the start time. Other models and firmware versions
+haven't been checked.
 
 ---
 
@@ -327,7 +370,7 @@ parsing needs to be version-aware.
 
 ## Provenance
 
-The fields in this specification were established in three layers, each checked
+The fields in this specification were established in four layers, each checked
 against the next:
 
 1. **libdivecomputer.** The documented sample fields (depth, next stop, TTS, gas
@@ -347,6 +390,12 @@ against the next:
    battery-percent byte (11), the SAC bytes (30–31), and the DCIEM branch for
    bytes 24–25 were confirmed against the field layout in Shearwater Cloud's own
    log parser. This step named the bytes; it did not copy any code.
+
+4. **Tissue snapshots.** Shearwater's parser names records `0x70`–`0x75` but
+   doesn't read them. Their layout ([§7.1](#71-tissue-loading-snapshots-0x700x75))
+   was worked out from logs alone, by reading the payloads as floats and
+   checking what they read at rest and how they change on air, nitrox, and
+   trimix dives.
 
 The result was verified end to end: the decoded documented channels match
 Shearwater Cloud's XML export byte-for-byte across every shared sample of 142
