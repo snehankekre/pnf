@@ -63,7 +63,9 @@ dive = pnf.decode(blob)
   verbatim as `(type_key, seq, raw_bytes)`. Shearwater's own desktop parser also
   leaves several record types (tissue snapshots, validity maps, surface ppO2,
   button pushes, DiveCAN events) undecoded; `pnf` preserves them rather than
-  discarding them, so a future decoder can revisit them.
+  discarding them, so a future decoder can revisit them. The tissue snapshots
+  (`0x70`–`0x75`) are now documented in [SPEC.md §7.1](SPEC.md#71-tissue-loading-snapshots-0x700x75)
+  and still come through here as raw records.
 
 Under the DCIEM deco model, sample bytes 24-25 encode a safe-ascent depth
 instead of a ceiling / GF99 pair; `pnf` decodes them to `safe_ascent_depth_m`
