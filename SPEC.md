@@ -311,7 +311,7 @@ float32 values, unlike the big-endian integers elsewhere in the format:
 The timestamp uses the same clock as the start time in opening record 0. The
 first snapshot comes before the first dive sample, with the dive's start time
 as its timestamp, so it gives the compartment loadings at the start of the
-dive. Later snapshots follow every 24 samples at the default 10-second sample
+dive. Later snapshots follow every 24 or 25 samples at the default 10-second sample
 interval, 238–243 seconds apart by their timestamps.
 
 The values are identified as bar from what they read at rest. After a long
@@ -321,7 +321,14 @@ the 1021 mbar surface pressure the same log records. Helium values sit near
 0.001 on air and nitrox dives, and rise only on dives with a helium mix,
 reaching several bar in the fastest compartments on a 100 m trimix dive.
 Floats 32–35 behave like nitrogen loadings and 36–39 like helium loadings, but
-what they track hasn't been established.
+what they track hasn't been established. They equal none of the 32 Bühlmann
+values in the same snapshot or the one before. At rest, floats 32–35 read
+0.794–0.798 and 36–39 read zero. During a dive they respond one after another:
+on a 101 m trimix dive, float 32 rises within four minutes, float 33 after
+about eight, float 34 after about twelve, and they peak at about 28, 52, and
+70 minutes. That is how compartments in series behave, each filling from the
+one before, and DCIEM's model is described as four compartments in series. On
+logs set to DCIEM this hasn't been checked.
 
 These observations come from 144 logs from a Perdix 2 and a Petrel 3, holding
 1,487 snapshots (8,922 records, all in order). In 143 of the 144, the first
